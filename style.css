@@ -82,6 +82,9 @@ html, body {
   border-radius: 2px;
   pointer-events: none;
   visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  transform: translateZ(0);
 }
 
 .page-layer.is-active {
@@ -628,3 +631,45 @@ html, body {
 .corner-tr { top: 0;    right: 0; }
 .corner-bl { bottom: 0; left: 0; }
 .corner-tl { top: 0;    left: 0; }
+
+/* Mobile phone & compact tablet polish */
+@media (max-width: 600px) {
+  .reading-stage {
+    padding:
+      max(6px, env(safe-area-inset-top))
+      max(6px, env(safe-area-inset-right))
+      max(6px, env(safe-area-inset-bottom))
+      max(6px, env(safe-area-inset-left));
+  }
+
+  .comic-book {
+    height: min(calc(100dvh - 12px), calc((100vw - 12px) * 1.41421356));
+    width: min(calc((100dvh - 12px) / 1.41421356), calc(100vw - 12px));
+  }
+
+  .panel-play-btn,
+  .p8-reset-btn,
+  .p8-scroll-up-btn,
+  .page15-slide-up-btn {
+    width: clamp(40px, 1.35cm, 54px);
+    height: 24px;
+    font-size: 11px;
+  }
+
+  .page15-panel-1 {
+    top: 6%;
+    left: 8%;
+    width: 68%;
+  }
+
+  .page15-stage .page15-play-btn {
+    top: 16%;
+    left: 14%;
+  }
+
+  .page15-gif-box {
+    bottom: 8%;
+    right: 6%;
+    width: 68%;
+  }
+}
