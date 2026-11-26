@@ -114,7 +114,7 @@
       id: 'page-10',
       label: 'Page 11',
       fullBleed: true,
-      panels: [{ type: 'video', src: 'assets/page 10 comp 3.mp4', loop: true }]
+      panels: [{ type: 'video', src: 'assets/page 10 new comp.mp4', loop: true }]
     },
     {
       id: 'page-11',
@@ -245,6 +245,15 @@
       }
     }
 
+    // Release decoder memory for far-away pages (critical on phones / tablets)
+    releaseVideo(video) {
+      if (!video.dataset.loadedSrc || !video.paused) return;
+      delete video.dataset.loadedSrc;
+      video.preload = 'none';
+      video.removeAttribute('src');
+      try { video.load(); } catch (_) {}
+    }
+
     ensureImageSrc(img, src) {
       if (!img.dataset.loadedSrc) {
         img.dataset.loadedSrc = '1';
@@ -327,6 +336,8 @@
             this.ensureVideoSrc(entry.video, entry.src, 'auto');
           } else if (dist === 2) {
             this.ensureVideoSrc(entry.video, entry.src, 'metadata');
+          } else if (dist > 3) {
+            this.releaseVideo(entry.video);
           }
         }
         for (const amb of this.ambientEntries) {
@@ -339,8 +350,9 @@
               amb.video.muted = true;
               amb.video.play().catch(() => {});
             });
-          } else if (!amb.video.paused) {
-            amb.video.pause();
+          } else {
+            if (!amb.video.paused) amb.video.pause();
+            if (dist > 3) this.releaseVideo(amb.video);
           }
         }
         for (const imgEntry of this.imageEntries) {
