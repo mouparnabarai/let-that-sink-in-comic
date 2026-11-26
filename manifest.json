@@ -1,0 +1,18 @@
+{
+  "name": "A3 Interactive Comic Book",
+  "short_name": "A3 Comic",
+  "description": "Interactive vertical A3 comic book with analog page-turn physics and per-panel video playback.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#17181c",
+  "theme_color": "#17181c",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
