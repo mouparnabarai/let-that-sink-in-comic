@@ -227,14 +227,36 @@
   // =========================================================================
   class ComicVideoController {
     constructor() {
-      this.entries = []; // { video, btn, pageIndex }
-      this.ambientEntries = []; // { video, pageIndex } auto-looping page backgrounds
+      this.entries = []; // { video, btn, pageIndex, src }
+      this.ambientEntries = []; // { video, pageIndex, src } auto-looping page backgrounds
+      this.imageEntries = []; // { img, pageIndex, src } lazy-decoded page images
       this.stopCallbacks = []; // extra stop handlers (e.g. Page 15 GIF)
+      this.initialReady = false;
     }
 
-    register(video, btn, pageIndex) {
+    ensureVideoSrc(video, src, preloadMode) {
+      if (!video.dataset.loadedSrc) {
+        video.dataset.loadedSrc = '1';
+        video.preload = preloadMode;
+        video.src = src;
+        video.load();
+      } else if (video.preload !== preloadMode) {
+        video.preload = preloadMode;
+      }
+    }
+
+    ensureImageSrc(img, src) {
+      if (!img.dataset.loadedSrc) {
+        img.dataset.loadedSrc = '1';
+        img.src = src;
+        if (typeof img.decode === 'function') {
+          img.decode().catch(() => {});
+        }
+      }
+    }
+
+    register(video, btn, pageIndex, encodedSrc) {
       video.pause();
-      video.currentTime = 0;
 
       const syncUI = () => {
         const playing = !video.paused && !video.ended;
@@ -255,10 +277,14 @@
       video.addEventListener('ended', syncUI);
 
       syncUI();
-      this.entries.push({ video, btn, pageIndex });
+      this.entries.push({ video, btn, pageIndex, src: encodedSrc });
     }
 
     playExclusive(targetVideo) {
+      const found = this.entries.find((e) => e.video === targetVideo);
+      if (found) {
+        this.ensureVideoSrc(found.video, found.src, 'auto');
+      }
       this.pauseAllExcept(targetVideo);
       if (targetVideo.ended) {
         targetVideo.currentTime = 0;
@@ -294,51 +320,84 @@
     }
 
     updatePreload(activeIndex) {
-      for (const entry of this.entries) {
-        const near = Math.abs(entry.pageIndex - activeIndex) <= 1;
-        const desired = near ? 'auto' : 'metadata';
-        if (entry.video.preload !== desired) {
-          entry.video.preload = desired;
+      const loadNeighbors = () => {
+        for (const entry of this.entries) {
+          const dist = Math.abs(entry.pageIndex - activeIndex);
+          if (dist <= 1) {
+            this.ensureVideoSrc(entry.video, entry.src, 'auto');
+          } else if (dist === 2) {
+            this.ensureVideoSrc(entry.video, entry.src, 'metadata');
+          }
         }
-      }
-      for (const amb of this.ambientEntries) {
-        const near = Math.abs(amb.pageIndex - activeIndex) <= 1;
-        amb.video.preload = near ? 'auto' : 'metadata';
-        if (amb.pageIndex === activeIndex) {
-          amb.video.play().catch(() => {
-            amb.video.muted = true;
-            amb.video.play().catch(() => {});
-          });
-        } else if (!amb.video.paused) {
-          amb.video.pause();
+        for (const amb of this.ambientEntries) {
+          const dist = Math.abs(amb.pageIndex - activeIndex);
+          if (dist <= 2) {
+            this.ensureVideoSrc(amb.video, amb.src, dist <= 1 ? 'auto' : 'metadata');
+          }
+          if (amb.pageIndex === activeIndex) {
+            amb.video.play().catch(() => {
+              amb.video.muted = true;
+              amb.video.play().catch(() => {});
+            });
+          } else if (!amb.video.paused) {
+            amb.video.pause();
+          }
         }
+        for (const imgEntry of this.imageEntries) {
+          if (Math.abs(imgEntry.pageIndex - activeIndex) <= 3) {
+            this.ensureImageSrc(imgEntry.img, imgEntry.src);
+          }
+        }
+      };
+
+      // On very first boot, load ONLY Page 1 first so it appears fast, then prefetch Page 2 & 3
+      if (!this.initialReady && activeIndex === 0) {
+        this.initialReady = true;
+        const firstEntries = this.entries.filter((e) => e.pageIndex === 0);
+        firstEntries.forEach((e) => this.ensureVideoSrc(e.video, e.src, 'auto'));
+        let triggered = false;
+        const kickNeighbors = () => {
+          if (triggered) return;
+          triggered = true;
+          loadNeighbors();
+        };
+        if (firstEntries[0]) {
+          firstEntries[0].video.addEventListener('loadeddata', kickNeighbors, { once: true });
+        }
+        setTimeout(kickNeighbors, 700);
+        return;
       }
+
+      loadNeighbors();
     }
 
     startAmbientForPage(pageIndex) {
       for (const amb of this.ambientEntries) {
-        if (amb.pageIndex === pageIndex && amb.video.paused) {
-          amb.video.play().catch(() => {
-            amb.video.muted = true;
-            amb.video.play().catch(() => {});
-          });
+        if (amb.pageIndex === pageIndex) {
+          this.ensureVideoSrc(amb.video, amb.src, 'auto');
+          if (amb.video.paused) {
+            amb.video.play().catch(() => {
+              amb.video.muted = true;
+              amb.video.play().catch(() => {});
+            });
+          }
         }
       }
     }
   }
 
   // =========================================================================
-  // VIDEO ELEMENT HELPER
+  // VIDEO ELEMENT HELPER (LAZY SRC UNTIL PAGE IS NEARBY)
   // =========================================================================
   function createVideoWithButton(src, pageIndex, videoCtrl, loop) {
+    const encodedSrc = encodeURI(src) + '#t=0.001';
     const video = document.createElement('video');
     video.className = 'panel-video';
-    video.src = encodeURI(src);
     video.playsInline = true;
     video.setAttribute('playsinline', '');
     video.setAttribute('webkit-playsinline', '');
     video.loop = Boolean(loop);
-    video.preload = pageIndex <= 1 ? 'auto' : 'metadata';
+    video.preload = 'none';
 
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -346,7 +405,7 @@
     btn.textContent = '▶';
     btn.setAttribute('aria-label', 'Play video');
 
-    videoCtrl.register(video, btn, pageIndex);
+    videoCtrl.register(video, btn, pageIndex, encodedSrc);
     return { video, btn };
   }
 
@@ -677,16 +736,15 @@
     let hasFinishedCurrent = false;
 
     const videos = pageSpec.videos.map((src, i) => {
+      const encodedSrc = encodeURI(src) + '#t=0.001';
       const video = document.createElement('video');
       video.className = 'page9-video' + (i === 0 ? ' is-current' : '');
-      video.src = encodeURI(src);
       video.playsInline = true;
       video.setAttribute('playsinline', '');
       video.setAttribute('webkit-playsinline', '');
       video.loop = false;
-      video.preload = 'metadata';
+      video.preload = 'none';
       video.pause();
-      video.currentTime = 0;
 
       const syncBtn = () => {
         if (i !== currentSeq) return;
@@ -705,7 +763,7 @@
         }
       });
 
-      videoCtrl.entries.push({ video, btn, pageIndex });
+      videoCtrl.entries.push({ video, btn, pageIndex, src: encodedSrc });
       stage.appendChild(video);
       return video;
     });
@@ -745,16 +803,16 @@
     stage.className = 'page15-stage';
 
     // 1. Full-page looping background video (loops automatically on page turn)
+    const bgEncodedSrc = encodeURI(pageSpec.bgSrc) + '#t=0.001';
     const bgVideo = document.createElement('video');
     bgVideo.className = 'page15-bg-video panel-video';
-    bgVideo.src = encodeURI(pageSpec.bgSrc);
     bgVideo.playsInline = true;
     bgVideo.setAttribute('playsinline', '');
     bgVideo.setAttribute('webkit-playsinline', '');
     bgVideo.loop = true;
     bgVideo.muted = true;
-    bgVideo.preload = 'metadata';
-    videoCtrl.ambientEntries.push({ video: bgVideo, pageIndex });
+    bgVideo.preload = 'none';
+    videoCtrl.ambientEntries.push({ video: bgVideo, pageIndex, src: bgEncodedSrc });
     stage.appendChild(bgVideo);
 
     // 2. Top-left video page 15.1.mp4 (1cm from top, 2cm from left)
@@ -860,12 +918,13 @@
       box.appendChild(video);
       box.appendChild(btn);
     } else {
+      const encodedSrc = encodeURI(panelSpec.src);
       const img = document.createElement('img');
       img.className = 'panel-image' + (panelSpec.contain ? ' contain' : '');
-      img.src = encodeURI(panelSpec.src);
       img.alt = '';
       img.decoding = 'async';
       img.draggable = false;
+      videoCtrl.imageEntries.push({ img, pageIndex, src: encodedSrc });
       box.appendChild(img);
     }
 
@@ -950,8 +1009,16 @@
       this.turningLayer = null;
       this.revealLayer = null;
 
+      // Lightweight offscreen snapshot canvas for 60fps page curl show-through
+      this.backBuffer = document.createElement('canvas');
+      this.backBuffer.width = 280;
+      this.backBuffer.height = 396;
+      this.backCtx = this.backBuffer.getContext('2d');
+      this.hasSnapshot = false;
+
       this.isDragging = false;
       this.activeCorner = null;
+      this.dragCleanup = null;
       this.dragPos = { x: 0, y: 0 };
       this.pageRect = { width: 0, height: 0, left: 0, top: 0 };
       this.animId = null;
@@ -1003,6 +1070,44 @@
       return false;
     }
 
+    captureTurningPageSnapshot() {
+      this.hasSnapshot = false;
+      if (!this.turningLayer) return;
+      const W = this.pageRect.width;
+      const H = this.pageRect.height;
+      if (W <= 0 || H <= 0) return;
+
+      const bW = this.backBuffer.width;
+      const bH = this.backBuffer.height;
+      const sx = bW / W;
+      const sy = bH / H;
+      const bctx = this.backCtx;
+      bctx.clearRect(0, 0, bW, bH);
+      bctx.fillStyle = '#ffffff';
+      bctx.fillRect(0, 0, bW, bH);
+
+      const bookRect = this.pageRect;
+      const mediaEls = this.turningLayer.querySelectorAll('.panel-video, .panel-image');
+      mediaEls.forEach((el) => {
+        if (el.classList.contains('page9-video') && !el.classList.contains('is-current')) return;
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return;
+        const x = (r.left - bookRect.left) * sx;
+        const y = (r.top - bookRect.top) * sy;
+        const w = r.width * sx;
+        const h = r.height * sy;
+        try {
+          if (el.tagName === 'VIDEO' && el.readyState >= 2) {
+            bctx.drawImage(el, x, y, w, h);
+            this.hasSnapshot = true;
+          } else if (el.tagName === 'IMG' && el.complete && el.naturalWidth > 0) {
+            bctx.drawImage(el, x, y, w, h);
+            this.hasSnapshot = true;
+          }
+        } catch (_) {}
+      });
+    }
+
     prepareTurnLayers(direction) {
       const targetIndex = this.currentIndex + direction;
       if (targetIndex < 0 || targetIndex >= this.layers.length) return false;
@@ -1012,6 +1117,7 @@
 
       this.turningLayer = this.layers[this.currentIndex];
       this.revealLayer = this.layers[targetIndex];
+      this.captureTurningPageSnapshot();
       this.videoCtrl.startAmbientForPage(targetIndex);
 
       this.layers.forEach((layer, idx) => {
@@ -1049,6 +1155,7 @@
     }
 
     startManualDrag(corner, clientX, clientY) {
+      if (this.dragCleanup) this.dragCleanup();
       if (this.animId || !this.canTurn(corner)) return;
       paperAudio.init();
       this.updateSize();
@@ -1067,7 +1174,7 @@
 
       const onMove = (ev) => {
         if (!this.isDragging) return;
-        ev.preventDefault();
+        if (ev.cancelable) ev.preventDefault();
         hasMoved = true;
 
         const m = ev.touches ? ev.touches[0] : ev;
@@ -1076,32 +1183,29 @@
 
         const W = this.pageRect.width;
         const H = this.pageRect.height;
-        const anchorX = corner === 'bl' || corner === 'tl' ? W : 0;
-        const anchorY = corner === 'tr' || corner === 'tl' ? 0 : H;
-        const maxD = Math.hypot(W, H);
-        const curD = Math.hypot(rawX - anchorX, rawY - anchorY);
 
-        if (curD > maxD) {
-          const r = maxD / curD;
-          rawX = anchorX + (rawX - anchorX) * r;
-          rawY = anchorY + (rawY - anchorY) * r;
-        }
-
+        // Allow dragging all the way across the spine (-1.05W .. +2.05W) so the page never stalls mid-turn
         this.dragPos = {
-          x: Math.max(-W * 0.35, Math.min(W * 1.35, rawX)),
-          y: Math.max(0, Math.min(H, rawY))
+          x: Math.max(-W * 1.05, Math.min(W * 2.05, rawX)),
+          y: Math.max(-H * 0.15, Math.min(H * 1.15, rawY))
         };
         this.renderTurn();
       };
 
-      const onEnd = () => {
-        if (!this.isDragging) return;
-        this.isDragging = false;
+      const cleanupListeners = () => {
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onEnd);
         window.removeEventListener('touchmove', onMove);
         window.removeEventListener('touchend', onEnd);
         window.removeEventListener('touchcancel', onEnd);
+        window.removeEventListener('blur', onEnd);
+        this.dragCleanup = null;
+      };
+
+      const onEnd = () => {
+        if (!this.isDragging) return;
+        this.isDragging = false;
+        cleanupListeners();
 
         if (!hasMoved) {
           this.clearTurnVisuals();
@@ -1112,11 +1216,13 @@
         this.finishDrag();
       };
 
+      this.dragCleanup = cleanupListeners;
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onEnd);
       window.addEventListener('touchmove', onMove, { passive: false });
       window.addEventListener('touchend', onEnd);
       window.addEventListener('touchcancel', onEnd);
+      window.addEventListener('blur', onEnd);
     }
 
     bindGrip(elem, corner) {
@@ -1236,8 +1342,8 @@
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, W, H);
 
-      // Low-GSM show-through of turning page's media
-      if (this.turningLayer) {
+      // Fast 60fps low-GSM show-through from cached 280x396 snapshot
+      if (this.hasSnapshot) {
         ctx.save();
         ctx.translate(midX, midY);
         ctx.rotate(dragAngle);
@@ -1245,22 +1351,7 @@
         ctx.rotate(-dragAngle);
         ctx.translate(-midX, -midY);
         ctx.globalAlpha = 0.12;
-
-        const bookRect = this.pageRect;
-        const mediaEls = this.turningLayer.querySelectorAll('.panel-video, .panel-image');
-        mediaEls.forEach((el) => {
-          const r = el.getBoundingClientRect();
-          const x = r.left - bookRect.left;
-          const y = r.top - bookRect.top;
-          if (r.width <= 0 || r.height <= 0) return;
-          try {
-            if (el.tagName === 'VIDEO' && el.readyState >= 2) {
-              ctx.drawImage(el, x, y, r.width, r.height);
-            } else if (el.tagName === 'IMG' && el.complete && el.naturalWidth > 0) {
-              ctx.drawImage(el, x, y, r.width, r.height);
-            }
-          } catch (_) {}
-        });
+        ctx.drawImage(this.backBuffer, 0, 0, W, H);
         ctx.restore();
       }
 
@@ -1344,12 +1435,13 @@
       const isForward = toIndex > this.currentIndex;
       const startX = this.dragPos.x;
       const startY = this.dragPos.y;
-      const endX = isForward ? -W * 0.38 : W * 1.38;
-      const endY = H * 0.88;
+      // Carry the corner completely past the opposite spine (-1.04W / +2.04W) so fold reaches 0 / W smoothly
+      const endX = isForward ? -W * 1.04 : W * 2.04;
+      const endY = H * 0.94;
       this.activeCorner = isForward ? 'br' : 'bl';
 
       const t0 = performance.now();
-      const dur = 460;
+      const dur = 420;
 
       const step = (now) => {
         const p = Math.min(1, (now - t0) / dur);
